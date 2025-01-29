@@ -1,362 +1,185 @@
 import React, { useState, useEffect } from "react";
 import { ethers } from "ethers";
-import {  toast } from "react-toastify";
-import "react-toastify/dist/ReactToastify.css";
-import abi from "./abi.json"
-
-const contractABI = abi;
+import { toast } from "react-toastify";
+import abi from "./abi.json";
 
 const contractAddress = "0x17282d6Ad90e84E24ee68fe68fD01014D9B8d7B3";
+const contractABI = abi;
 
-const TaskApp = () => {
-  const [account, setAccount] = useState("");
+function App() {
   const [contract, setContract] = useState(null);
+  const [account, setAccount] = useState("");
   const [tasks, setTasks] = useState([]);
-  const [newTask, setNewTask] = useState({ title: "", text: "" });
   const [loading, setLoading] = useState(false);
-  const [isInitialized, setIsInitialized] = useState(false);
+  const [error, setError] = useState("");
+  const [newTask, setNewTask] = useState({ title: "", text: "" });
 
-  // Check if we're on the correct network
-  const checkNetwork = async (provider) => {
-    try {
-      const network = await provider.getNetwork();
-      // Replace with your expected network ID
-      const expectedNetwork = 1; // 1 for mainnet, 5 for goerli, etc.
-      if (network.chainId !== expectedNetwork) {
-        toast.error("Please connect to the correct network!");
-        return false;
-      }
-      return true;
-    } catch (error) {
-      console.error("Network check failed:", error);
-      return false;
-    }
-  };
-
-  // Initialize web3 and contract
-  useEffect(() => {
-    const init = async () => {
-      try {
-        if (!window.ethereum) {
-          toast.error("Please install MetaMask!");
-          return;
-        }
-
-        await connectWallet();
-        setIsInitialized(true);
-      } catch (error) {
-        console.error("Initialization failed:", error);
-        toast.error("Failed to initialize the application");
-      }
-    };
-
-    if (!isInitialized) {
-      init();
-    }
-
-    // Setup event listeners
-    if (window.ethereum) {
-      window.ethereum.on("accountsChanged", handleAccountChange);
-      window.ethereum.on("chainChanged", () => window.location.reload());
-    }
-
-    // Cleanup
-    return () => {
-      if (window.ethereum) {
-        window.ethereum.removeListener("accountsChanged", handleAccountChange);
-      }
-    };
-  }, [isInitialized]);
-
-  const handleAccountChange = async (accounts) => {
-    if (accounts.length === 0) {
-      // User disconnected their wallet
-      setAccount("");
-      setTasks([]);
-      toast.info("Wallet disconnected");
-    } else {
-      setAccount(accounts[0]);
-      if (contract) {
-        await loadTasks(contract);
-      }
-    }
-  };
-
-  const connectWallet = async () => {
+  // Initialize web3 connection
+  const initializeWeb3 = async () => {
     try {
       if (!window.ethereum) {
-        throw new Error("MetaMask is not installed");
+        throw new Error("Please install MetaMask");
       }
 
-      setLoading(true);
-      const provider = new ethers.providers.Web3Provider(window.ethereum);
-
-      // Check network before proceeding
-      const isCorrectNetwork = await checkNetwork(provider);
-      if (!isCorrectNetwork) return;
-
+      // Request account access
       const accounts = await window.ethereum.request({
         method: "eth_requestAccounts",
       });
+      setAccount(accounts[0]);
 
-      const signer = provider.getSigner();
-      const taskContract = new ethers.Contract(
+      // Create contract instance
+      const provider = new ethers.BrowserProvider(window.ethereum);
+      const signer = await provider.getSigner();
+      const contractInstance = new ethers.Contract(
         contractAddress,
         contractABI,
         signer
       );
+      setContract(contractInstance);
 
-      // Verify contract existence
-      const code = await provider.getCode(contractAddress);
-      if (code === "0x") {
-        throw new Error("Contract not deployed at specified address");
-      }
-
-      setAccount(accounts[0]);
-      setContract(taskContract);
-      await loadTasks(taskContract);
-      toast.success("Wallet connected successfully!");
-    } catch (error) {
-      console.error("Wallet connection failed:", error);
-      toast.error(error.message || "Failed to connect wallet");
-    } finally {
-      setLoading(false);
+      // Listen for account changes
+      window.ethereum.on("accountsChanged", (accounts) => {
+        setAccount(accounts[0]);
+      });
+    } catch (err) {
+      setError(err.message);
     }
   };
 
-  const loadTasks = async (taskContract) => {
-    if (!account || !taskContract) {
-      console.warn("Cannot load tasks: wallet not connected");
-      return;
-    }
+  // console.log(contract.getMyTask());
+  // Fetch all tasks
+  const fetchTasks = async () => {
+    if (!contract) return;
 
     try {
       setLoading(true);
-      const allTasks = await taskContract.getMyTask();
-      // Filter out deleted tasks and sort by ID
-      const activeTasks = allTasks
-        .filter((task) => !task.isDeleted)
-        .sort((a, b) => b.id - a.id);
-      setTasks(activeTasks);
-    } catch (error) {
-      console.error("Failed to load tasks:", error);
-      toast.error("Error loading tasks: " + (error.reason || error.message));
+      const taskList = await contract.getMyTask();
+      console.log(taskList)
+      setTasks(taskList.filter((task) => !task.isDeleted));
+    } catch (err) {
+      setError(`Failed to fetch tasks: ${err.message}`);
     } finally {
       setLoading(false);
     }
   };
 
-  const validateTaskInput = () => {
-    if (!newTask.title.trim()) {
-      toast.error("Task title cannot be empty");
-      return false;
-    }
-    if (!newTask.text.trim()) {
-      toast.error("Task description cannot be empty");
-      return false;
-    }
-    if (newTask.title.length > 100) {
-      toast.error("Task title too long (max 100 characters)");
-      return false;
-    }
-    if (newTask.text.length > 500) {
-      toast.error("Task description too long (max 500 characters)");
-      return false;
-    }
-    return true;
-  };
-
-  const addTask = async (e) => {
+  // Add new task
+  const handleAddTask = async (e) => {
     e.preventDefault();
-
-    if (!account) {
-      toast.error("Please connect your wallet first");
-      return;
-    }
-
-    if (!validateTaskInput()) {
-      return;
-    }
+    if (!contract) return;
 
     try {
       setLoading(true);
-      const tx = await contract.addTask(
-        newTask.text.trim(),
-        newTask.title.trim(),
-        false,
-        { gasLimit: 200000 } // Specify gas limit
-      );
+      const tx = await contract.addTask(newTask.text, newTask.title, false);
+      await tx.wait();
 
-      toast.info("Adding task... Please wait for confirmation");
-
-      // Wait for transaction confirmation
-      const receipt = await tx.wait();
-
-      // Check for AddTask event
-      const event = receipt.events?.find((e) => e.event === "AddTask");
-      if (!event) {
-        throw new Error("Add task event not found in transaction");
-      }
-
-      toast.success("Task added successfully!");
       setNewTask({ title: "", text: "" });
-      await loadTasks(contract);
-    } catch (error) {
-      console.error("Failed to add task:", error);
-      toast.error(error.reason || error.message);
+      await fetchTasks();
+    } catch (err) {
+      setError(`Failed to add task: ${err.message}`);
     } finally {
       setLoading(false);
     }
   };
 
-  const deleteTask = async (taskId) => {
-    if (!account) {
-      toast.error("Please connect your wallet first");
-      return;
-    }
+  // Delete task
+  const handleDeleteTask = async (taskId) => {
+    if (!contract) return;
 
     try {
       setLoading(true);
-      const tx = await contract.deleteTask(taskId, { gasLimit: 100000 });
+      const tx = await contract.deleteTask(taskId);
+      await tx.wait();
 
-      toast.info("Deleting task... Please wait for confirmation");
-
-      const receipt = await tx.wait();
-
-      // Check for DeleteTask event
-      const event = receipt.events?.find((e) => e.event === "DeleteTask");
-      if (!event) {
-        throw new Error("Delete task event not found in transaction");
-      }
-
-      toast.success("Task deleted successfully!");
-      await loadTasks(contract);
-    } catch (error) {
-      console.error("Failed to delete task:", error);
-      if (error.message.includes("owner")) {
-        toast.error("You are not the owner of this task");
-      } else {
-        toast.error(error.reason || error.message);
-      }
+      await fetchTasks();
+    } catch (err) {
+      setError(`Failed to delete task: ${err.message}`);
     } finally {
       setLoading(false);
     }
   };
+
+  // Initialize on component mount
+  useEffect(() => {
+    initializeWeb3();
+  }, []);
+
+  // Fetch tasks when contract is available
+  useEffect(() => {
+    if (contract) {
+      fetchTasks();
+    }
+  }, [contract]);
 
   return (
-    <div className="min-h-screen bg-gray-100 p-4">
+    <div className="p-4">
+      <div className="max-w-2xl mx-auto">
+        <div className="mb-4">
+          <h1 className="text-2xl font-bold mb-2">Task Manager DApp</h1>
+          <p className="text-sm text-gray-600">
+            Connected Account: {account || "Not connected"}
+          </p>
+        </div>
 
-      <div className="max-w-4xl mx-auto">
-        <div className="bg-white rounded-lg shadow-md p-6 mb-6">
-          <div className="flex justify-between items-center mb-6">
-            <h1 className="text-2xl font-bold text-gray-800">
-              Task Manager dApp
-            </h1>
-            <div className="text-sm text-gray-600">
-              {account ? (
-                <div className="flex items-center space-x-2">
-                  <span className="px-4 py-2 bg-gray-100 rounded-md">
-                    {`${account.slice(0, 6)}...${account.slice(-4)}`}
-                  </span>
-                  <button
-                    onClick={() => window.location.reload()}
-                    className="text-blue-500 hover:text-blue-600"
-                  >
-                    Disconnect
-                  </button>
+        {error && (
+          <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
+            {error}
+          </div>
+        )}
+
+        <form onSubmit={handleAddTask} className="mb-6">
+          <div className="mb-4">
+            <input
+              type="text"
+              placeholder="Task Title"
+              value={newTask.title}
+              onChange={(e) =>
+                setNewTask((prev) => ({ ...prev, title: e.target.value }))
+              }
+              className="w-full p-2 border rounded"
+            />
+          </div>
+          <div className="mb-4">
+            <textarea
+              placeholder="Task Description"
+              value={newTask.text}
+              onChange={(e) =>
+                setNewTask((prev) => ({ ...prev, text: e.target.value }))
+              }
+              className="w-full p-2 border rounded"
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={loading || !contract}
+            className="w-full bg-blue-500 text-white p-2 rounded hover:bg-blue-600 disabled:bg-gray-400"
+          >
+            {loading ? "Processing..." : "Add Task"}
+          </button>
+        </form>
+
+        <div className="space-y-4">
+          {tasks.map((task) => (
+            <div key={task.id.toString()} className="border p-4 rounded">
+              <div className="flex justify-between">
+                <div>
+                  <h3 className="font-bold">{task.taskTitle}</h3>
+                  <p className="text-gray-600">{task.taskText}</p>
                 </div>
-              ) : (
                 <button
-                  onClick={connectWallet}
+                  onClick={() => handleDeleteTask(task.id)}
+                  className="bg-red-500 text-white px-3 py-1 rounded hover:bg-red-600"
                   disabled={loading}
-                  className="bg-blue-500 text-white px-4 py-2 rounded-md hover:bg-blue-600 disabled:bg-gray-400"
                 >
-                  {loading ? "Connecting..." : "Connect Wallet"}
+                  Delete
                 </button>
-              )}
+              </div>
             </div>
-          </div>
-
-          {account && (
-            <form onSubmit={addTask} className="mb-6">
-              <div className="mb-4">
-                <input
-                  type="text"
-                  placeholder="Task Title (max 100 chars)"
-                  className="w-full p-2 border rounded-md"
-                  value={newTask.title}
-                  onChange={(e) =>
-                    setNewTask({ ...newTask, title: e.target.value })
-                  }
-                  maxLength={100}
-                  disabled={loading}
-                  required
-                />
-              </div>
-              <div className="mb-4">
-                <textarea
-                  placeholder="Task Description (max 500 chars)"
-                  className="w-full p-2 border rounded-md"
-                  value={newTask.text}
-                  onChange={(e) =>
-                    setNewTask({ ...newTask, text: e.target.value })
-                  }
-                  maxLength={500}
-                  disabled={loading}
-                  required
-                />
-              </div>
-              <button
-                type="submit"
-                disabled={loading}
-                className="bg-green-500 text-white px-4 py-2 rounded-md hover:bg-green-600 disabled:bg-gray-400"
-              >
-                {loading ? "Processing..." : "Add Task"}
-              </button>
-            </form>
-          )}
-
-          <div className="space-y-4">
-            {!account ? (
-              <div className="text-center text-gray-600">
-                Please connect your wallet to view tasks
-              </div>
-            ) : loading ? (
-              <div className="text-center text-gray-600">Loading tasks...</div>
-            ) : tasks.length === 0 ? (
-              <div className="text-center text-gray-600">No tasks found</div>
-            ) : (
-              tasks.map((task) => (
-                <div
-                  key={task.id.toString()}
-                  className="border rounded-md p-4 hover:shadow-md transition-shadow"
-                >
-                  <div className="flex justify-between items-start">
-                    <div className="flex-1">
-                      <h3 className="font-semibold text-lg">
-                        {task.taskTitle}
-                      </h3>
-                      <p className="text-gray-600 mt-1">{task.taskText}</p>
-                      <p className="text-xs text-gray-400 mt-2">
-                        ID: {task.id.toString()}
-                      </p>
-                    </div>
-                    <button
-                      onClick={() => deleteTask(task.id)}
-                      disabled={loading}
-                      className="bg-red-500 text-white px-3 py-1 rounded-md hover:bg-red-600 disabled:bg-gray-400 ml-4"
-                    >
-                      Delete
-                    </button>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
+          ))}
         </div>
       </div>
     </div>
   );
-};
+}
 
-export default TaskApp;
+export default App;
